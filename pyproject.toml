@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "tftext_webserver"
+version = "0.1.0"
+description = "A repository that spins up a webserver to easily play around with transformer models, shows the predictions and keeps a history of inputs."
+authors = ["Lukas Erhard <luerhard@googlemail.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+sqlalchemy = "^2.0.30"
+torch = "^2.3.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
