@@ -11,7 +11,11 @@ packages = [{include = "src"}]
 python = "^3.10"
 sqlalchemy = "^2.0.30"
 torch = "^2.3.0"
+fastapi = "^0.111.0"
 
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.4"
 
 [build-system]
 requires = ["poetry-core"]
