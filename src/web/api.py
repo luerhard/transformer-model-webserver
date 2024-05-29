@@ -1,12 +1,8 @@
 import logging
 import math
-import re
 import uuid
 from collections import deque
-from pathlib import Path
 
-import sqlalchemy as sa
-import torch
 from fastapi import FastAPI
 from fastapi import Request
 from fastapi.staticfiles import StaticFiles
@@ -14,23 +10,19 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import create_engine
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-from transformers import AutoTokenizer
+from pathlib import Path
 
 import src
-import src.bert.io
-from src.web.models import Base  # type: ignore
-from src.web.models import Model  # type: ignore
-from src.web.models import Prediction  # type: ignore
-from src.web.models import Sample  # type: ignore
+from src.web.models import Base
+from src.web.models import Prediction
+from src.web.models import Sample
+from src.model import BertTransformer
 from src.web.sessionmanager import SessionManager
 
 logfmt = "[%(asctime)s] {%(lineno)d} %(levelname)s - %(message)s"
 logging.basicConfig(format=logfmt)
 logger = logging.getLogger(__name__)
 
-
-TOKENIZER = "deepset/gbert-large"
-MODEL = "tmp/model_v8.model"
 
 app = FastAPI()
 
@@ -40,8 +32,19 @@ app.mount(
     name="static",
 )
 
+
+def load_engine():
+    conn_string = f"sqlite:///{src.PATH / 'predictions.sqlite'}"
+    engine = create_engine(conn_string)
+    Base.metadata.create_all(engine)
+    return engine
+
+
+engine = load_engine()
+
 templates = Jinja2Templates(directory="templates")
 session_manager = SessionManager()
+model = BertTransformer(name="luerhard/PopBERT")
 
 
 def assert_user(user):
@@ -53,24 +56,6 @@ def assert_user(user):
 def get_chain(user) -> deque:
     global session_manager
     return session_manager.get(user, deque(maxlen=100))
-
-
-def load_model():
-    model = torch.load(src.PATH / MODEL)
-    model.to("cpu")
-    return model
-
-
-def load_tokenizer():
-    tokenizer = AutoTokenizer.from_pretrained(TOKENIZER)
-    return lambda x: tokenizer(x, padding=True, return_tensors="pt")
-
-
-def load_engine():
-    conn_string = f"sqlite:///{src.PATH / 'tmp/predictions.sqlite'}"
-    engine = create_engine(conn_string)
-    Base.metadata.create_all(engine)
-    return engine
 
 
 def translate_result(prediction: Prediction) -> list[tuple[str, float]]:
@@ -93,28 +78,22 @@ def translate_result(prediction: Prediction) -> list[tuple[str, float]]:
     return results
 
 
-def predict(session, tokenizer, model, sample: Sample, model_id: int) -> Prediction:
+def predict(session, model, sample: Sample) -> Prediction:
     prediction = (
         session.query(Prediction)
-        .filter(
-            Prediction.sample_id == sample.id,
-            Prediction.model_id == model_id,
-        )
+        .filter(Prediction.sample_id == sample.id)
         .one_or_none()
     )
 
     if not prediction:
-        encoding = tokenizer(sample.text)
-        _, probas = model(**encoding)
-        result = probas.mean(axis=1).detach().numpy()[0]
+        result = model.predict(sample.text)[0]
 
         logger.warn("New Prediction for Sample %s -- %s", sample.id, result)
 
         prediction = Prediction(
             sample_id=sample.id,
-            model_id=model_id,
-            pop_antielite=result[1],
-            pop_pplcentr=result[2],
+            pop_antielite=result[0],
+            pop_pplcentr=result[1],
         )
         sample.predictions.append(prediction)
         session.add(sample)
@@ -136,37 +115,10 @@ def get_sample(session, text: str) -> Sample:
     return sample
 
 
-def get_model_info(session):
-    version = re.search(r"(?<=_)(v.*?)(?=\.model$)", MODEL)
-    if not version:
-        raise Exception(f"No valid version string found in: {MODEL}")
-    version = version.group(0)
-    logger.info("Version extracted: %s", version)
-    model = session.query(Model).filter(Model.version == version).one_or_none()
-    if not model:
-        model = Model(version=version, path=MODEL)
-        session.add(model)
-        session.commit()
-
-    return version, model.id
-
-
-engine = load_engine()
-model = load_model()
-tokenizer = load_tokenizer()
-
-with Session(engine) as s:
-    model_version, model_id = get_model_info(s)
-    logger.info("Model ID found: %d", model_id)
-
-
 @app.get("/high")
 async def high(request: Request, sortby: str, n: int = 20, user: str | None = None):
     global engine
     global model
-    global tokenizer
-    global model_id
-    global model_version
 
     logger.warn("Sorting by: %s", sortby)
     logger.warning("User: %s", user)
@@ -178,13 +130,7 @@ async def high(request: Request, sortby: str, n: int = 20, user: str | None = No
     with Session(engine) as session:
         samples = (
             session.query(Sample, Prediction)
-            .join(
-                Prediction,
-                sa.and_(
-                    Sample.id == Prediction.sample_id,
-                    Prediction.model_id == model_id,
-                ),
-            )
+            .join(Prediction, Sample.id == Prediction.sample_id)
             .order_by(sorter.desc())
             .limit(n)
         )
@@ -196,7 +142,7 @@ async def high(request: Request, sortby: str, n: int = 20, user: str | None = No
     session_manager[user] = chain
     return templates.TemplateResponse(
         "index.html",
-        {"request": request, "data": chain, "user": user, "version": model_version},
+        {"request": request, "data": chain, "user": user},
     )
 
 
@@ -204,9 +150,7 @@ async def high(request: Request, sortby: str, n: int = 20, user: str | None = No
 async def random(request: Request, n: int = 20, user: str | None = None):
     global engine
     global model
-    global tokenizer
     global model_id
-    global model_version
 
     logger.warning("User: %s", user)
     user = assert_user(user)
@@ -216,14 +160,14 @@ async def random(request: Request, n: int = 20, user: str | None = None):
     with Session(engine) as session:
         samples = session.query(Sample).order_by(func.random()).limit(n)
         for sample in samples:
-            pred = predict(session, tokenizer, model, sample, model_id=model_id)
+            pred = predict(session, model, sample)
             result = translate_result(pred)
             chain.appendleft({"message": sample.text, "result": result})
 
     session_manager[user] = chain
     return templates.TemplateResponse(
         "index.html",
-        {"request": request, "data": chain, "user": user, "version": model_version},
+        {"request": request, "data": chain, "user": user},
     )
 
 
@@ -231,9 +175,6 @@ async def random(request: Request, n: int = 20, user: str | None = None):
 async def root(request: Request, text: str = "", user: str | None = None):
     global engine
     global model
-    global tokenizer
-    global model_id
-    global model_version
 
     logger.warning("User: %s", user)
     logger.warning("received text input: %s", text)
@@ -245,7 +186,7 @@ async def root(request: Request, text: str = "", user: str | None = None):
             if len(chain) == 0:
                 samples = session.query(Sample).order_by(func.random()).limit(10)
                 for sample in samples:
-                    pred = predict(session, tokenizer, model, sample, model_id=model_id)
+                    pred = predict(session, model, sample)
                     result = translate_result(pred)
                     chain.appendleft({"message": sample.text, "result": result})
 
@@ -256,7 +197,7 @@ async def root(request: Request, text: str = "", user: str | None = None):
 
             if text and prev_msg != text:
                 sample = get_sample(session, text)
-                pred = predict(session, tokenizer, model, sample, model_id=model_id)
+                pred = predict(session, model, sample)
                 result = translate_result(pred)
                 chain.appendleft({"message": sample.text, "result": result})
 
@@ -268,5 +209,5 @@ async def root(request: Request, text: str = "", user: str | None = None):
     session_manager[user] = chain
     return templates.TemplateResponse(
         "index.html",
-        {"request": request, "data": chain, "user": user, "version": model_version},
+        {"request": request, "data": chain, "user": user},
     )

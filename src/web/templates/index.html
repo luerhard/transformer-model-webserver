@@ -10,18 +10,8 @@
       <tr>
         <tr class="bg-light">
           <th>Eingabe</th>
-          <th>Model: {{ version }}</th>
         </tr>
         <td class="textcol">
-            <form method="get" action="/">
-                <input type="hidden" name="n" value="20" />
-                <input type="hidden" name="user" value="{{ user }}" />
-                <div class="input-group input-group-lg mb-3">
-                    <span class="input-group-text">Satz eingeben</span>
-                    <input type="text" class="form-control" aria-label="Sizing example input" aria-describedby="inputGroup-sizing-lg" id="text" name="text" autocomplete="off" autofocus>
-                    <input class="btn btn-outline-primary" type="submit" value="Abschicken" />
-                </div>
-            </form>
             <form class="form-inline" method="get" action="/high">
                 <input type="hidden" name="n" value="20" />
                 <input type="hidden" name="user" value="{{ user }}" />
@@ -34,6 +24,15 @@
                     <button class="btn btn-lg btn-outline-secondary me-1" type="submit" name="sortby" value="souv_pplmore">People-More</button>
                     <button class="btn btn-lg btn-outline-secondary me-1" type="submit" name="sortby" value="ideol_left">Left</button>
                     <button class="btn btn-lg btn-outline-secondary me-1" type="submit" name="sortby" value="ideol_right">Right</button> -->
+                </div>
+            </form>
+            <form method="get" action="/">
+                <input type="hidden" name="n" value="20" />
+                <input type="hidden" name="user" value="{{ user }}" />
+                <div class="input-group input-group-lg mb-3">
+                    <span class="input-group-text">Satz eingeben</span>
+                    <input type="text" class="form-control" aria-label="Sizing example input" aria-describedby="inputGroup-sizing-lg" id="text" name="text" autocomplete="off" autofocus>
+                    <input class="btn btn-outline-primary" type="submit" value="Abschicken" />
                 </div>
             </form>
         </td>
